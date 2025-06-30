@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 import collections
 import random
@@ -13,11 +13,10 @@ from Road_profile import SquareWaveProfile
 from Reward_Function import RewardCalculator
 from NNArchitecture import Actor, Critic
 
-# --- Hyperparameters (Revised) ---
+# --- Hyperparameters ---
 STATE_DIM = 4
 ACTION_DIM = 1
-# REVISED: Use the prototype's realistic max force from the project proposal.
-MAX_ACTION = 700.0
+MAX_ACTION = 720.0
 HIDDEN_DIM = 256
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
@@ -25,13 +24,11 @@ TAU = 0.005
 ALPHA = 0.2
 BUFFER_SIZE = 1000000
 BATCH_SIZE = 256
-# REVISED: Increased episodes for proper convergence.
 TOTAL_EPISODES = 2000
-# REVISED: Adjusted dt for simulation stability with the prototype model.
 DT = 0.001
-# REVISED: Adjusted steps to maintain a 5-second episode duration (5000 * 0.001 = 5s).
 MAX_STEPS_PER_EPISODE = 5000
-
+# --- NEW: Hyperparameter for logging frequency ---
+LOG_INTERVAL = 10 # Print log every 10 episodes
 
 class ReplayBuffer:
     """A simple replay buffer for storing and sampling experiences."""
@@ -125,7 +122,11 @@ if __name__ == '__main__':
     agent = SACAgent()
     replay_buffer = ReplayBuffer(BUFFER_SIZE)
     
-    episode_rewards = []
+    # --- NEW: Data structures for improved logging ---
+    all_episode_rewards = []
+    # Use a deque for an efficient rolling window of the last 100 rewards
+    last_100_rewards = collections.deque(maxlen=100)
+    avg_rewards_over_time = []
     
     for episode in range(TOTAL_EPISODES):
         state = model.reset()
@@ -135,7 +136,6 @@ if __name__ == '__main__':
         road_profile = road.get_profile(time_vector)
 
         for step in range(MAX_STEPS_PER_EPISODE):
-            # Add a warmup period for the first few episodes to fill the buffer
             if len(replay_buffer) < BATCH_SIZE:
                 action = np.random.uniform(-MAX_ACTION, MAX_ACTION, size=(ACTION_DIM,))
             else:
@@ -143,7 +143,6 @@ if __name__ == '__main__':
             
             current_road_height = road_profile[step]
             
-            # The model's step function expects a float for 'u', not a 1-element array
             next_state, x_s_ddot, p_regen = model.step(action[0], current_road_height)
             
             reward = reward_calc.calculate_reward(p_regen, x_s_ddot, state[2], current_road_height, action[0])
@@ -155,17 +154,25 @@ if __name__ == '__main__':
             state = next_state
             episode_reward += reward
             
-            # Only start training after the buffer has enough samples
             if len(replay_buffer) >= BATCH_SIZE:
                 agent.train(replay_buffer)
 
-        episode_rewards.append(episode_reward)
-        print(f"Episode: {episode+1}/{TOTAL_EPISODES}, Total Reward: {episode_reward:.2f}")
+        all_episode_rewards.append(episode_reward)
+        last_100_rewards.append(episode_reward)
+        avg_reward = np.mean(last_100_rewards)
+        avg_rewards_over_time.append(avg_reward)
+        
+        # --- NEW: Print log at specified intervals ---
+        if (episode + 1) % LOG_INTERVAL == 0:
+            print(f"Episode: {episode+1}/{TOTAL_EPISODES} | Reward: {episode_reward:.2f} | Avg. Reward (Last 100): {avg_reward:.2f}")
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(range(1, TOTAL_EPISODES + 1), episode_rewards)
+    # --- NEW: More informative plotting at the end of training ---
+    plt.figure(figsize=(12, 6))
+    plt.plot(all_episode_rewards, label='Episode Reward', alpha=0.5)
+    plt.plot(avg_rewards_over_time, label='Avg. Reward (100-episode rolling)', color='red', linewidth=2)
     plt.xlabel("Episode")
     plt.ylabel("Total Reward")
     plt.title("SAC Training Progress")
+    plt.legend()
     plt.grid(True)
     plt.show()
