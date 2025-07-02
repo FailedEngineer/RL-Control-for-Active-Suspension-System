@@ -5,7 +5,7 @@ from Road_profile import SquareWaveProfile
 
 # --- Simulation Setup ---
 sim_duration = 6.0  # seconds
-dt = 0.001          # time step
+dt = 0.005          # time step
 
 # Instantiate the model and the road profile generator
 model = QuarterCarModel(dt=dt)

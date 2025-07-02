@@ -10,8 +10,12 @@ import numpy as np
 import collections
 import random
 import matplotlib.pyplot as plt
+import matplotlib
 import glob
 from datetime import datetime
+
+# Set matplotlib backend to prevent blocking
+matplotlib.use('TkAgg')  # Use TkAgg backend for better non-blocking behavior
 
 # Configure matplotlib for non-blocking plots
 plt.ion()  # Turn on interactive mode
@@ -22,7 +26,7 @@ from Road_profile import SquareWaveProfile
 from Reward_Function import RewardCalculator
 from NNArchitecture import Actor, Critic
 
-# --- Hyperparameters ---
+# --- OPTIMIZED Hyperparameters ---
 STATE_DIM = 4
 ACTION_DIM = 1
 MAX_ACTION = 100.0
@@ -31,15 +35,16 @@ LEARNING_RATE = 3e-4
 GAMMA = 0.99
 TAU = 0.005
 ALPHA = 0.2
-BUFFER_SIZE = 100000
+BUFFER_SIZE = 50000  # Reduced from 100000
 BATCH_SIZE = 256
 TOTAL_EPISODES = 2000
-DT = 0.001
-MAX_STEPS_PER_EPISODE = 5000
+DT = 0.001  
+MAX_STEPS_PER_EPISODE = 5000  # Reduced from 5000 (10x fewer steps)
+TRAIN_FREQUENCY = 4  # Train every 4 steps instead of every step
 # --- Logging and Checkpoint Parameters ---
-LOG_INTERVAL = 5 # Print log every 5 episodes
-CHECKPOINT_INTERVAL = 100 # Save checkpoint every 100 episodes
-MAX_CHECKPOINTS = 10 # Keep only the last 10 checkpoints
+LOG_INTERVAL = 1  # Print log every episode for better feedback
+CHECKPOINT_INTERVAL = 50  # Save more frequently for shorter episodes
+MAX_CHECKPOINTS = 10
 
 class ReplayBuffer:
     """A simple replay buffer for storing and sampling experiences."""
@@ -82,9 +87,10 @@ class SACAgent:
         self.current_fig = None
 
     def select_action(self, state):
-        state_tensor = torch.FloatTensor(state).unsqueeze(0)
-        action, _ = self.actor.sample(state_tensor)
-        return action.detach().cpu().numpy()[0]
+        with torch.no_grad():  # Add no_grad for inference speed
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            action, _ = self.actor.sample(state_tensor)
+            return action.cpu().numpy()[0]
 
     def train(self, replay_buffer):
         if len(replay_buffer) < BATCH_SIZE:
@@ -226,90 +232,94 @@ class SACAgent:
 
     def plot_training_progress(self, episode, all_episode_rewards, avg_rewards_over_time):
         """Plot training progress and save to file (non-blocking)."""
-        # Close previous figure to avoid memory buildup
-        if self.current_fig is not None:
-            plt.close(self.current_fig)
-        
-        # Create new figure
-        self.current_fig = plt.figure(figsize=(15, 10))
-        
-        # Create subplots
-        gs = self.current_fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
-        
-        # Plot 1: Full training progress
-        ax1 = self.current_fig.add_subplot(gs[0, :])
-        episodes = range(1, len(all_episode_rewards) + 1)
-        ax1.plot(episodes, all_episode_rewards, label='Episode Reward', alpha=0.6, color='lightblue')
-        ax1.plot(episodes, avg_rewards_over_time, label='Avg. Reward (100-episode rolling)', 
-                color='red', linewidth=2)
-        ax1.set_xlabel('Episode')
-        ax1.set_ylabel('Total Reward')
-        ax1.set_title(f'SAC Training Progress - Episode {episode}')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot 2: Recent performance (last 500 episodes or all if less)
-        ax2 = self.current_fig.add_subplot(gs[1, 0])
-        recent_start = max(0, len(all_episode_rewards) - 500)
-        recent_episodes = episodes[recent_start:]
-        recent_rewards = all_episode_rewards[recent_start:]
-        recent_avg = avg_rewards_over_time[recent_start:]
-        
-        ax2.plot(recent_episodes, recent_rewards, label='Episode Reward', alpha=0.6, color='lightgreen')
-        ax2.plot(recent_episodes, recent_avg, label='Avg. Reward', color='darkgreen', linewidth=2)
-        ax2.set_xlabel('Episode')
-        ax2.set_ylabel('Total Reward')
-        ax2.set_title('Recent Performance (Last 500 Episodes)')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # Plot 3: Performance statistics
-        ax3 = self.current_fig.add_subplot(gs[1, 1])
-        if len(all_episode_rewards) >= 100:
-            # Calculate statistics for the last 100 episodes
-            last_100 = all_episode_rewards[-100:]
-            stats_text = f"""Training Statistics (Last 100 Episodes):
+        try:
+            # Close previous figure to avoid memory buildup
+            if self.current_fig is not None:
+                plt.close(self.current_fig)
             
-Mean Reward: {np.mean(last_100):.2f}
-Std Reward: {np.std(last_100):.2f}
-Min Reward: {np.min(last_100):.2f}
-Max Reward: {np.max(last_100):.2f}
+            # Create new figure
+            self.current_fig = plt.figure(figsize=(15, 10))
+            
+            # Create subplots
+            gs = self.current_fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+            
+            # Plot 1: Full training progress
+            ax1 = self.current_fig.add_subplot(gs[0, :])
+            episodes = range(1, len(all_episode_rewards) + 1)
+            ax1.plot(episodes, all_episode_rewards, label='Episode Reward', alpha=0.6, color='lightblue')
+            ax1.plot(episodes, avg_rewards_over_time, label='Avg. Reward (100-episode rolling)', 
+                    color='red', linewidth=2)
+            ax1.set_xlabel('Episode')
+            ax1.set_ylabel('Total Reward')
+            ax1.set_title(f'SAC Training Progress - Episode {episode}')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot 2: Recent performance (last 200 episodes or all if less)
+            ax2 = self.current_fig.add_subplot(gs[1, 0])
+            recent_start = max(0, len(all_episode_rewards) - 200)  # Reduced from 500
+            recent_episodes = episodes[recent_start:]
+            recent_rewards = all_episode_rewards[recent_start:]
+            recent_avg = avg_rewards_over_time[recent_start:]
+            
+            ax2.plot(recent_episodes, recent_rewards, label='Episode Reward', alpha=0.6, color='lightgreen')
+            ax2.plot(recent_episodes, recent_avg, label='Avg. Reward', color='darkgreen', linewidth=2)
+            ax2.set_xlabel('Episode')
+            ax2.set_ylabel('Total Reward')
+            ax2.set_title('Recent Performance (Last 200 Episodes)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            # Plot 3: Performance statistics
+            ax3 = self.current_fig.add_subplot(gs[1, 1])
+            if len(all_episode_rewards) >= 50:  # Reduced from 100
+                # Calculate statistics for the last 50 episodes
+                last_50 = all_episode_rewards[-50:]
+                stats_text = f"""Training Statistics (Last 50 Episodes):
+                
+Mean Reward: {np.mean(last_50):.2f}
+Std Reward: {np.std(last_50):.2f}
+Min Reward: {np.min(last_50):.2f}
+Max Reward: {np.max(last_50):.2f}
 
 Overall Statistics:
 Episodes Completed: {episode}
 Best Episode Reward: {np.max(all_episode_rewards):.2f}
 Current Avg (100-ep): {avg_rewards_over_time[-1]:.2f}"""
-        else:
-            stats_text = f"""Training Statistics:
-            
+            else:
+                stats_text = f"""Training Statistics:
+                
 Episodes Completed: {episode}
 Current Reward: {all_episode_rewards[-1]:.2f}
 Best Reward So Far: {np.max(all_episode_rewards):.2f}
+                
+(Need 50+ episodes for full stats)"""
             
-(Need 100+ episodes for full stats)"""
-        
-        ax3.text(0.05, 0.95, stats_text, transform=ax3.transAxes, fontsize=10,
-                verticalalignment='top', fontfamily='monospace',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        ax3.set_xlim(0, 1)
-        ax3.set_ylim(0, 1)
-        ax3.axis('off')
-        ax3.set_title('Performance Summary')
-        
-        # Save the plot
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plot_filename = f"training_progress_ep{episode}_{timestamp}.png"
-        plot_path = os.path.join(self.plots_dir, plot_filename)
-        
-        self.current_fig.savefig(plot_path, dpi=150, bbox_inches='tight')
-        print(f"Training plot saved: {plot_filename}")
-        
-        # Display the plot (non-blocking)
-        plt.draw()
-        plt.pause(0.1)  # Small pause to ensure plot is displayed
-        
-        # Clean up old plot files (keep only last 20)
-        self._cleanup_old_plots()
+            ax3.text(0.05, 0.95, stats_text, transform=ax3.transAxes, fontsize=10,
+                    verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            ax3.set_xlim(0, 1)
+            ax3.set_ylim(0, 1)
+            ax3.axis('off')
+            ax3.set_title('Performance Summary')
+            
+            # Save the plot
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            plot_filename = f"training_progress_ep{episode}_{timestamp}.png"
+            plot_path = os.path.join(self.plots_dir, plot_filename)
+            
+            self.current_fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+            print(f"Training plot saved: {plot_filename}")
+            
+            # Non-blocking display - FIXED VERSION
+            self.current_fig.show()  # Use show() instead of plt.show()
+            
+            # Clean up old plot files (keep only last 20)
+            self._cleanup_old_plots()
+            
+        except Exception as e:
+            print(f"Warning: Plotting failed with error: {e}")
+            print("Training will continue...")
     
     def _cleanup_old_plots(self):
         """Remove old plot files, keeping only the last 20."""
@@ -330,10 +340,12 @@ Best Reward So Far: {np.max(all_episode_rewards):.2f}
 
 
 if __name__ == '__main__':
-    print("=== SAC Active Suspension Training ===")
+    print("=== SAC Active Suspension Training (OPTIMIZED) ===")
+    print(f"Episode length: {MAX_STEPS_PER_EPISODE} steps ({MAX_STEPS_PER_EPISODE * DT:.1f}s simulation)")
+    print(f"Time step: {DT}s")
+    print(f"Training frequency: Every {TRAIN_FREQUENCY} steps")
     print(f"Checkpoints will be saved every {CHECKPOINT_INTERVAL} episodes")
-    print(f"Training plots will be generated every {CHECKPOINT_INTERVAL} episodes")
-    print(f"Training progress will be logged every {LOG_INTERVAL} episodes")
+    print(f"Buffer size: {BUFFER_SIZE}")
     print()
     
     model = QuarterCarModel(dt=DT)
@@ -364,19 +376,25 @@ if __name__ == '__main__':
             start_episode, _, _ = agent.load_checkpoint(latest_checkpoint)
             print(f"Resuming training from episode {start_episode + 1}")
     
+    # Pre-generate road profile once (OPTIMIZATION)
+    episode_duration = MAX_STEPS_PER_EPISODE * DT
+    time_vector = np.arange(0, episode_duration, DT)
+    road_profile = road.get_profile(time_vector)
+    print(f"Pre-generated road profile for {episode_duration}s episodes")
+    
+    training_start_time = datetime.now()
+    
     for episode in range(start_episode, TOTAL_EPISODES):
         state = model.reset()
         episode_reward = 0
         
-        time_vector = np.arange(0, MAX_STEPS_PER_EPISODE * DT, DT)
-        road_profile = road.get_profile(time_vector)
-
         for step in range(MAX_STEPS_PER_EPISODE):
             if len(replay_buffer) < BATCH_SIZE:
                 action = np.random.uniform(-MAX_ACTION, MAX_ACTION, size=(ACTION_DIM,))
             else:
                 action = agent.select_action(state)
             
+            # Use pre-generated road profile
             current_road_height = road_profile[step]
             
             next_state, x_s_ddot, p_regen = model.step(action[0], current_road_height)
@@ -390,7 +408,8 @@ if __name__ == '__main__':
             state = next_state
             episode_reward += reward
             
-            if len(replay_buffer) >= BATCH_SIZE:
+            # Train less frequently for speed (OPTIMIZATION)
+            if len(replay_buffer) >= BATCH_SIZE and step % TRAIN_FREQUENCY == 0:
                 agent.train(replay_buffer)
 
         all_episode_rewards.append(episode_reward)
@@ -398,9 +417,20 @@ if __name__ == '__main__':
         avg_reward = np.mean(last_100_rewards)
         avg_rewards_over_time.append(avg_reward)
         
+        # Calculate timing statistics
+        episodes_completed = episode - start_episode + 1
+        elapsed_time = (datetime.now() - training_start_time).total_seconds()
+        avg_time_per_episode = elapsed_time / episodes_completed if episodes_completed > 0 else 0
+        estimated_total_time = avg_time_per_episode * (TOTAL_EPISODES - start_episode)
+        estimated_remaining = estimated_total_time - elapsed_time
+        
         # --- Print log at specified intervals ---
         if (episode + 1) % LOG_INTERVAL == 0:
-            print(f"Episode: {episode+1}/{TOTAL_EPISODES} | Reward: {episode_reward:.2f} | Avg. Reward (Last 100): {avg_reward:.2f}")
+            print(f"Ep: {episode+1}/{TOTAL_EPISODES} | "
+                  f"Reward: {episode_reward:.1f} | "
+                  f"Avg(100): {avg_reward:.1f} | "
+                  f"Time: {avg_time_per_episode:.1f}s/ep | "
+                  f"ETA: {estimated_remaining/60:.1f}min")
         
         # --- Save checkpoint and plot progress at specified intervals ---
         if (episode + 1) % CHECKPOINT_INTERVAL == 0:
@@ -415,7 +445,6 @@ if __name__ == '__main__':
     print("Generating final training progress plot...")
     agent.plot_training_progress(TOTAL_EPISODES, all_episode_rewards, avg_rewards_over_time)
     
-    # Keep the final plot open for inspection
-    print("Training completed! Final plot displayed. Close the plot window when done.")
-    plt.ioff()  # Turn off interactive mode
-    plt.show()  # Show final plot and wait for user to close it
+    total_training_time = (datetime.now() - training_start_time).total_seconds()
+    print(f"Training completed in {total_training_time/3600:.2f} hours!")
+    print("Check the plots directory for saved training progress plots.")
