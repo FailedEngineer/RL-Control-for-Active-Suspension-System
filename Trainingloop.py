@@ -1,3 +1,7 @@
+import os
+# Fix for OpenMP library conflict (must be set before importing torch/matplotlib)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -6,6 +10,11 @@ import numpy as np
 import collections
 import random
 import matplotlib.pyplot as plt
+import glob
+from datetime import datetime
+
+# Configure matplotlib for non-blocking plots
+plt.ion()  # Turn on interactive mode
 
 # --- Import our custom modules ---
 from Suspension_Model import QuarterCarModel
@@ -16,19 +25,21 @@ from NNArchitecture import Actor, Critic
 # --- Hyperparameters ---
 STATE_DIM = 4
 ACTION_DIM = 1
-MAX_ACTION = 720.0
+MAX_ACTION = 100.0
 HIDDEN_DIM = 256
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 TAU = 0.005
 ALPHA = 0.2
-BUFFER_SIZE = 1000000
+BUFFER_SIZE = 100000
 BATCH_SIZE = 256
 TOTAL_EPISODES = 2000
 DT = 0.001
 MAX_STEPS_PER_EPISODE = 5000
-# --- NEW: Hyperparameter for logging frequency ---
-LOG_INTERVAL = 10 # Print log every 10 episodes
+# --- Logging and Checkpoint Parameters ---
+LOG_INTERVAL = 5 # Print log every 5 episodes
+CHECKPOINT_INTERVAL = 100 # Save checkpoint every 100 episodes
+MAX_CHECKPOINTS = 10 # Keep only the last 10 checkpoints
 
 class ReplayBuffer:
     """A simple replay buffer for storing and sampling experiences."""
@@ -47,7 +58,7 @@ class ReplayBuffer:
 
 class SACAgent:
     """The Soft Actor-Critic Agent."""
-    def __init__(self):
+    def __init__(self, checkpoint_dir="checkpoints", plots_dir="training_plots"):
         self.actor = Actor(STATE_DIM, ACTION_DIM, MAX_ACTION, HIDDEN_DIM)
         self.critic = Critic(STATE_DIM, ACTION_DIM, HIDDEN_DIM)
         self.critic_target = Critic(STATE_DIM, ACTION_DIM, HIDDEN_DIM)
@@ -60,6 +71,15 @@ class SACAgent:
         self.log_alpha = torch.tensor(np.log(ALPHA), requires_grad=True)
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=LEARNING_RATE)
         self.target_entropy = -torch.prod(torch.Tensor((ACTION_DIM,)).to(self.log_alpha.device)).item()
+        
+        # Checkpoint and plot management
+        self.checkpoint_dir = checkpoint_dir
+        self.plots_dir = plots_dir
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        os.makedirs(self.plots_dir, exist_ok=True)
+        
+        # Keep track of the current plot figure
+        self.current_fig = None
 
     def select_action(self, state):
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
@@ -110,8 +130,212 @@ class SACAgent:
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
             target_param.data.copy_(TAU * param.data + (1.0 - TAU) * target_param.data)
 
+    def save_checkpoint(self, episode, episode_reward, avg_reward):
+        """Save a checkpoint of the current model state."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        checkpoint_path = os.path.join(self.checkpoint_dir, f"sac_checkpoint_ep{episode}_{timestamp}.pt")
+        
+        checkpoint = {
+            'episode': episode,
+            'episode_reward': episode_reward,
+            'avg_reward': avg_reward,
+            'actor_state_dict': self.actor.state_dict(),
+            'critic_state_dict': self.critic.state_dict(),
+            'critic_target_state_dict': self.critic_target.state_dict(),
+            'actor_optimizer_state_dict': self.actor_optimizer.state_dict(),
+            'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
+            'log_alpha': self.log_alpha,
+            'alpha_optimizer_state_dict': self.alpha_optimizer.state_dict(),
+            'hyperparameters': {
+                'STATE_DIM': STATE_DIM,
+                'ACTION_DIM': ACTION_DIM,
+                'MAX_ACTION': MAX_ACTION,
+                'HIDDEN_DIM': HIDDEN_DIM,
+                'LEARNING_RATE': LEARNING_RATE,
+                'GAMMA': GAMMA,
+                'TAU': TAU,
+                'ALPHA': ALPHA
+            }
+        }
+        
+        torch.save(checkpoint, checkpoint_path)
+        print(f"Checkpoint saved: {checkpoint_path}")
+        
+        # Clean up old checkpoints
+        self._cleanup_old_checkpoints()
+        
+        return checkpoint_path
+
+    def _cleanup_old_checkpoints(self):
+        """Remove old checkpoints, keeping only the last MAX_CHECKPOINTS."""
+        checkpoint_pattern = os.path.join(self.checkpoint_dir, "sac_checkpoint_*.pt")
+        checkpoint_files = glob.glob(checkpoint_pattern)
+        
+        if len(checkpoint_files) > MAX_CHECKPOINTS:
+            # Sort by modification time (oldest first)
+            checkpoint_files.sort(key=os.path.getmtime)
+            
+            # Remove the oldest files
+            files_to_remove = checkpoint_files[:-MAX_CHECKPOINTS]
+            for file_path in files_to_remove:
+                try:
+                    os.remove(file_path)
+                    print(f"Removed old checkpoint: {os.path.basename(file_path)}")
+                except OSError as e:
+                    print(f"Error removing {file_path}: {e}")
+
+    def load_checkpoint(self, checkpoint_path):
+        """Load a checkpoint and restore the model state."""
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        # Fix for PyTorch 2.6+ weights_only security change
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        except TypeError:
+            # Fallback for older PyTorch versions that don't have weights_only parameter
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        self.actor.load_state_dict(checkpoint['actor_state_dict'])
+        self.critic.load_state_dict(checkpoint['critic_state_dict'])
+        self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
+        self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        self.log_alpha = checkpoint['log_alpha']
+        self.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
+        
+        episode = checkpoint['episode']
+        episode_reward = checkpoint['episode_reward']
+        avg_reward = checkpoint['avg_reward']
+        
+        print(f"Checkpoint loaded: Episode {episode}, Reward: {episode_reward:.2f}, Avg Reward: {avg_reward:.2f}")
+        
+        return episode, episode_reward, avg_reward
+
+    def get_latest_checkpoint(self):
+        """Get the path to the most recent checkpoint."""
+        checkpoint_pattern = os.path.join(self.checkpoint_dir, "sac_checkpoint_*.pt")
+        checkpoint_files = glob.glob(checkpoint_pattern)
+        
+        if not checkpoint_files:
+            return None
+        
+        # Return the most recently modified checkpoint
+        latest_checkpoint = max(checkpoint_files, key=os.path.getmtime)
+        return latest_checkpoint
+
+    def plot_training_progress(self, episode, all_episode_rewards, avg_rewards_over_time):
+        """Plot training progress and save to file (non-blocking)."""
+        # Close previous figure to avoid memory buildup
+        if self.current_fig is not None:
+            plt.close(self.current_fig)
+        
+        # Create new figure
+        self.current_fig = plt.figure(figsize=(15, 10))
+        
+        # Create subplots
+        gs = self.current_fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+        
+        # Plot 1: Full training progress
+        ax1 = self.current_fig.add_subplot(gs[0, :])
+        episodes = range(1, len(all_episode_rewards) + 1)
+        ax1.plot(episodes, all_episode_rewards, label='Episode Reward', alpha=0.6, color='lightblue')
+        ax1.plot(episodes, avg_rewards_over_time, label='Avg. Reward (100-episode rolling)', 
+                color='red', linewidth=2)
+        ax1.set_xlabel('Episode')
+        ax1.set_ylabel('Total Reward')
+        ax1.set_title(f'SAC Training Progress - Episode {episode}')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Recent performance (last 500 episodes or all if less)
+        ax2 = self.current_fig.add_subplot(gs[1, 0])
+        recent_start = max(0, len(all_episode_rewards) - 500)
+        recent_episodes = episodes[recent_start:]
+        recent_rewards = all_episode_rewards[recent_start:]
+        recent_avg = avg_rewards_over_time[recent_start:]
+        
+        ax2.plot(recent_episodes, recent_rewards, label='Episode Reward', alpha=0.6, color='lightgreen')
+        ax2.plot(recent_episodes, recent_avg, label='Avg. Reward', color='darkgreen', linewidth=2)
+        ax2.set_xlabel('Episode')
+        ax2.set_ylabel('Total Reward')
+        ax2.set_title('Recent Performance (Last 500 Episodes)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Plot 3: Performance statistics
+        ax3 = self.current_fig.add_subplot(gs[1, 1])
+        if len(all_episode_rewards) >= 100:
+            # Calculate statistics for the last 100 episodes
+            last_100 = all_episode_rewards[-100:]
+            stats_text = f"""Training Statistics (Last 100 Episodes):
+            
+Mean Reward: {np.mean(last_100):.2f}
+Std Reward: {np.std(last_100):.2f}
+Min Reward: {np.min(last_100):.2f}
+Max Reward: {np.max(last_100):.2f}
+
+Overall Statistics:
+Episodes Completed: {episode}
+Best Episode Reward: {np.max(all_episode_rewards):.2f}
+Current Avg (100-ep): {avg_rewards_over_time[-1]:.2f}"""
+        else:
+            stats_text = f"""Training Statistics:
+            
+Episodes Completed: {episode}
+Current Reward: {all_episode_rewards[-1]:.2f}
+Best Reward So Far: {np.max(all_episode_rewards):.2f}
+            
+(Need 100+ episodes for full stats)"""
+        
+        ax3.text(0.05, 0.95, stats_text, transform=ax3.transAxes, fontsize=10,
+                verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        ax3.set_xlim(0, 1)
+        ax3.set_ylim(0, 1)
+        ax3.axis('off')
+        ax3.set_title('Performance Summary')
+        
+        # Save the plot
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"training_progress_ep{episode}_{timestamp}.png"
+        plot_path = os.path.join(self.plots_dir, plot_filename)
+        
+        self.current_fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+        print(f"Training plot saved: {plot_filename}")
+        
+        # Display the plot (non-blocking)
+        plt.draw()
+        plt.pause(0.1)  # Small pause to ensure plot is displayed
+        
+        # Clean up old plot files (keep only last 20)
+        self._cleanup_old_plots()
+    
+    def _cleanup_old_plots(self):
+        """Remove old plot files, keeping only the last 20."""
+        plot_pattern = os.path.join(self.plots_dir, "training_progress_*.png")
+        plot_files = glob.glob(plot_pattern)
+        
+        if len(plot_files) > 20:
+            # Sort by modification time (oldest first)
+            plot_files.sort(key=os.path.getmtime)
+            
+            # Remove the oldest files
+            files_to_remove = plot_files[:-20]
+            for file_path in files_to_remove:
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass  # Ignore errors when cleaning up plots
+
 
 if __name__ == '__main__':
+    print("=== SAC Active Suspension Training ===")
+    print(f"Checkpoints will be saved every {CHECKPOINT_INTERVAL} episodes")
+    print(f"Training plots will be generated every {CHECKPOINT_INTERVAL} episodes")
+    print(f"Training progress will be logged every {LOG_INTERVAL} episodes")
+    print()
+    
     model = QuarterCarModel(dt=DT)
     model.m_s, model.m_u, model.k_s, model.k_t, model.c_s = 20.4, 15.9, 8799.0, 90000.0, 100.0
     model._build_state_space_matrices()
@@ -122,13 +346,25 @@ if __name__ == '__main__':
     agent = SACAgent()
     replay_buffer = ReplayBuffer(BUFFER_SIZE)
     
-    # --- NEW: Data structures for improved logging ---
+    print(f"Checkpoints directory: {agent.checkpoint_dir}")
+    print(f"Plots directory: {agent.plots_dir}")
+    print()
+    
+    # --- Data structures for logging ---
     all_episode_rewards = []
-    # Use a deque for an efficient rolling window of the last 100 rewards
     last_100_rewards = collections.deque(maxlen=100)
     avg_rewards_over_time = []
     
-    for episode in range(TOTAL_EPISODES):
+    # --- Optional: Resume from checkpoint ---
+    start_episode = 0
+    latest_checkpoint = agent.get_latest_checkpoint()
+    if latest_checkpoint:
+        response = input(f"Found checkpoint: {os.path.basename(latest_checkpoint)}. Resume training? (y/n): ")
+        if response.lower() == 'y':
+            start_episode, _, _ = agent.load_checkpoint(latest_checkpoint)
+            print(f"Resuming training from episode {start_episode + 1}")
+    
+    for episode in range(start_episode, TOTAL_EPISODES):
         state = model.reset()
         episode_reward = 0
         
@@ -162,17 +398,24 @@ if __name__ == '__main__':
         avg_reward = np.mean(last_100_rewards)
         avg_rewards_over_time.append(avg_reward)
         
-        # --- NEW: Print log at specified intervals ---
+        # --- Print log at specified intervals ---
         if (episode + 1) % LOG_INTERVAL == 0:
             print(f"Episode: {episode+1}/{TOTAL_EPISODES} | Reward: {episode_reward:.2f} | Avg. Reward (Last 100): {avg_reward:.2f}")
+        
+        # --- Save checkpoint and plot progress at specified intervals ---
+        if (episode + 1) % CHECKPOINT_INTERVAL == 0:
+            agent.save_checkpoint(episode + 1, episode_reward, avg_reward)
+            agent.plot_training_progress(episode + 1, all_episode_rewards, avg_rewards_over_time)
 
-    # --- NEW: More informative plotting at the end of training ---
-    plt.figure(figsize=(12, 6))
-    plt.plot(all_episode_rewards, label='Episode Reward', alpha=0.5)
-    plt.plot(avg_rewards_over_time, label='Avg. Reward (100-episode rolling)', color='red', linewidth=2)
-    plt.xlabel("Episode")
-    plt.ylabel("Total Reward")
-    plt.title("SAC Training Progress")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    # --- Save final checkpoint and plot ---
+    print("Training completed. Saving final checkpoint...")
+    agent.save_checkpoint(TOTAL_EPISODES, all_episode_rewards[-1], avg_rewards_over_time[-1])
+    
+    # Final training progress plot
+    print("Generating final training progress plot...")
+    agent.plot_training_progress(TOTAL_EPISODES, all_episode_rewards, avg_rewards_over_time)
+    
+    # Keep the final plot open for inspection
+    print("Training completed! Final plot displayed. Close the plot window when done.")
+    plt.ioff()  # Turn off interactive mode
+    plt.show()  # Show final plot and wait for user to close it
