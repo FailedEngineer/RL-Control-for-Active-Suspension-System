@@ -14,8 +14,9 @@ import matplotlib
 import glob
 from datetime import datetime
 
-# Set matplotlib backend to prevent blocking
-matplotlib.use('TkAgg')  # Use TkAgg backend for better non-blocking behavior
+# Set matplotlib backend to prevent blocking. 
+# 'TkAgg' is a good choice for interactive plots.
+matplotlib.use('TkAgg')
 
 # Configure matplotlib for non-blocking plots
 plt.ion()  # Turn on interactive mode
@@ -35,15 +36,15 @@ LEARNING_RATE = 3e-4
 GAMMA = 0.99
 TAU = 0.005
 ALPHA = 0.2
-BUFFER_SIZE = 50000  # Reduced from 100000
+BUFFER_SIZE = 50000
 BATCH_SIZE = 256
 TOTAL_EPISODES = 2000
 DT = 0.001  
-MAX_STEPS_PER_EPISODE = 5000  # Reduced from 5000 (10x fewer steps)
-TRAIN_FREQUENCY = 4  # Train every 4 steps instead of every step
+MAX_STEPS_PER_EPISODE = 5000
+TRAIN_FREQUENCY = 4
 # --- Logging and Checkpoint Parameters ---
-LOG_INTERVAL = 1  # Print log every episode for better feedback
-CHECKPOINT_INTERVAL = 50  # Save more frequently for shorter episodes
+LOG_INTERVAL = 1
+CHECKPOINT_INTERVAL = 50
 MAX_CHECKPOINTS = 10
 
 class ReplayBuffer:
@@ -87,7 +88,7 @@ class SACAgent:
         self.current_fig = None
 
     def select_action(self, state):
-        with torch.no_grad():  # Add no_grad for inference speed
+        with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
             action, _ = self.actor.sample(state_tensor)
             return action.cpu().numpy()[0]
@@ -167,7 +168,6 @@ class SACAgent:
         torch.save(checkpoint, checkpoint_path)
         print(f"Checkpoint saved: {checkpoint_path}")
         
-        # Clean up old checkpoints
         self._cleanup_old_checkpoints()
         
         return checkpoint_path
@@ -178,10 +178,7 @@ class SACAgent:
         checkpoint_files = glob.glob(checkpoint_pattern)
         
         if len(checkpoint_files) > MAX_CHECKPOINTS:
-            # Sort by modification time (oldest first)
             checkpoint_files.sort(key=os.path.getmtime)
-            
-            # Remove the oldest files
             files_to_remove = checkpoint_files[:-MAX_CHECKPOINTS]
             for file_path in files_to_remove:
                 try:
@@ -195,11 +192,9 @@ class SACAgent:
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
         
-        # Fix for PyTorch 2.6+ weights_only security change
         try:
             checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         except TypeError:
-            # Fallback for older PyTorch versions that don't have weights_only parameter
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
         
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
@@ -226,24 +221,18 @@ class SACAgent:
         if not checkpoint_files:
             return None
         
-        # Return the most recently modified checkpoint
         latest_checkpoint = max(checkpoint_files, key=os.path.getmtime)
         return latest_checkpoint
 
     def plot_training_progress(self, episode, all_episode_rewards, avg_rewards_over_time):
         """Plot training progress and save to file (non-blocking)."""
         try:
-            # Close previous figure to avoid memory buildup
             if self.current_fig is not None:
                 plt.close(self.current_fig)
             
-            # Create new figure
             self.current_fig = plt.figure(figsize=(15, 10))
-            
-            # Create subplots
             gs = self.current_fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
             
-            # Plot 1: Full training progress
             ax1 = self.current_fig.add_subplot(gs[0, :])
             episodes = range(1, len(all_episode_rewards) + 1)
             ax1.plot(episodes, all_episode_rewards, label='Episode Reward', alpha=0.6, color='lightblue')
@@ -255,9 +244,8 @@ class SACAgent:
             ax1.legend()
             ax1.grid(True, alpha=0.3)
             
-            # Plot 2: Recent performance (last 200 episodes or all if less)
             ax2 = self.current_fig.add_subplot(gs[1, 0])
-            recent_start = max(0, len(all_episode_rewards) - 200)  # Reduced from 500
+            recent_start = max(0, len(all_episode_rewards) - 200)
             recent_episodes = episodes[recent_start:]
             recent_rewards = all_episode_rewards[recent_start:]
             recent_avg = avg_rewards_over_time[recent_start:]
@@ -270,10 +258,8 @@ class SACAgent:
             ax2.legend()
             ax2.grid(True, alpha=0.3)
             
-            # Plot 3: Performance statistics
             ax3 = self.current_fig.add_subplot(gs[1, 1])
-            if len(all_episode_rewards) >= 50:  # Reduced from 100
-                # Calculate statistics for the last 50 episodes
+            if len(all_episode_rewards) >= 50:
                 last_50 = all_episode_rewards[-50:]
                 stats_text = f"""Training Statistics (Last 50 Episodes):
                 
@@ -298,12 +284,9 @@ Best Reward So Far: {np.max(all_episode_rewards):.2f}
             ax3.text(0.05, 0.95, stats_text, transform=ax3.transAxes, fontsize=10,
                     verticalalignment='top', fontfamily='monospace',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-            ax3.set_xlim(0, 1)
-            ax3.set_ylim(0, 1)
             ax3.axis('off')
             ax3.set_title('Performance Summary')
             
-            # Save the plot
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             plot_filename = f"training_progress_ep{episode}_{timestamp}.png"
             plot_path = os.path.join(self.plots_dir, plot_filename)
@@ -311,10 +294,10 @@ Best Reward So Far: {np.max(all_episode_rewards):.2f}
             self.current_fig.savefig(plot_path, dpi=150, bbox_inches='tight')
             print(f"Training plot saved: {plot_filename}")
             
-            # Non-blocking display - FIXED VERSION
-            self.current_fig.show()  # Use show() instead of plt.show()
+            # Non-blocking display with a pause to allow rendering
+            self.current_fig.show()
+            plt.pause(0.1)  # <-- IMPORTANT: This gives the GUI time to draw the plot
             
-            # Clean up old plot files (keep only last 20)
             self._cleanup_old_plots()
             
         except Exception as e:
@@ -327,17 +310,13 @@ Best Reward So Far: {np.max(all_episode_rewards):.2f}
         plot_files = glob.glob(plot_pattern)
         
         if len(plot_files) > 20:
-            # Sort by modification time (oldest first)
             plot_files.sort(key=os.path.getmtime)
-            
-            # Remove the oldest files
             files_to_remove = plot_files[:-20]
             for file_path in files_to_remove:
                 try:
                     os.remove(file_path)
                 except OSError:
-                    pass  # Ignore errors when cleaning up plots
-
+                    pass
 
 if __name__ == '__main__':
     print("=== SAC Active Suspension Training (OPTIMIZED) ===")
@@ -362,12 +341,10 @@ if __name__ == '__main__':
     print(f"Plots directory: {agent.plots_dir}")
     print()
     
-    # --- Data structures for logging ---
     all_episode_rewards = []
     last_100_rewards = collections.deque(maxlen=100)
     avg_rewards_over_time = []
     
-    # --- Optional: Resume from checkpoint ---
     start_episode = 0
     latest_checkpoint = agent.get_latest_checkpoint()
     if latest_checkpoint:
@@ -376,7 +353,6 @@ if __name__ == '__main__':
             start_episode, _, _ = agent.load_checkpoint(latest_checkpoint)
             print(f"Resuming training from episode {start_episode + 1}")
     
-    # Pre-generate road profile once (OPTIMIZATION)
     episode_duration = MAX_STEPS_PER_EPISODE * DT
     time_vector = np.arange(0, episode_duration, DT)
     road_profile = road.get_profile(time_vector)
@@ -394,7 +370,6 @@ if __name__ == '__main__':
             else:
                 action = agent.select_action(state)
             
-            # Use pre-generated road profile
             current_road_height = road_profile[step]
             
             next_state, x_s_ddot, p_regen = model.step(action[0], current_road_height)
@@ -408,7 +383,6 @@ if __name__ == '__main__':
             state = next_state
             episode_reward += reward
             
-            # Train less frequently for speed (OPTIMIZATION)
             if len(replay_buffer) >= BATCH_SIZE and step % TRAIN_FREQUENCY == 0:
                 agent.train(replay_buffer)
 
@@ -417,14 +391,12 @@ if __name__ == '__main__':
         avg_reward = np.mean(last_100_rewards)
         avg_rewards_over_time.append(avg_reward)
         
-        # Calculate timing statistics
         episodes_completed = episode - start_episode + 1
         elapsed_time = (datetime.now() - training_start_time).total_seconds()
         avg_time_per_episode = elapsed_time / episodes_completed if episodes_completed > 0 else 0
         estimated_total_time = avg_time_per_episode * (TOTAL_EPISODES - start_episode)
         estimated_remaining = estimated_total_time - elapsed_time
         
-        # --- Print log at specified intervals ---
         if (episode + 1) % LOG_INTERVAL == 0:
             print(f"Ep: {episode+1}/{TOTAL_EPISODES} | "
                   f"Reward: {episode_reward:.1f} | "
@@ -432,19 +404,21 @@ if __name__ == '__main__':
                   f"Time: {avg_time_per_episode:.1f}s/ep | "
                   f"ETA: {estimated_remaining/60:.1f}min")
         
-        # --- Save checkpoint and plot progress at specified intervals ---
         if (episode + 1) % CHECKPOINT_INTERVAL == 0:
             agent.save_checkpoint(episode + 1, episode_reward, avg_reward)
             agent.plot_training_progress(episode + 1, all_episode_rewards, avg_rewards_over_time)
 
-    # --- Save final checkpoint and plot ---
     print("Training completed. Saving final checkpoint...")
     agent.save_checkpoint(TOTAL_EPISODES, all_episode_rewards[-1], avg_rewards_over_time[-1])
     
-    # Final training progress plot
     print("Generating final training progress plot...")
     agent.plot_training_progress(TOTAL_EPISODES, all_episode_rewards, avg_rewards_over_time)
     
     total_training_time = (datetime.now() - training_start_time).total_seconds()
     print(f"Training completed in {total_training_time/3600:.2f} hours!")
     print("Check the plots directory for saved training progress plots.")
+
+    # Keep the final plot window open until you manually close it
+    print("Close the final plot window to exit the script.")
+    plt.ioff()  # Turn off interactive mode
+    plt.show()  # Show the plot and block until it's closed
