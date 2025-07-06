@@ -35,16 +35,16 @@ HIDDEN_DIM = 256
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 TAU = 0.005
-ALPHA = 0.2
+ALPHA = 0.4
 BUFFER_SIZE = 50000
-BATCH_SIZE = 256
-TOTAL_EPISODES = 2000
+BATCH_SIZE = 128
+TOTAL_EPISODES = 7000
 DT = 0.001  
 MAX_STEPS_PER_EPISODE = 5000
-TRAIN_FREQUENCY = 4
+TRAIN_FREQUENCY = 10
 # --- Logging and Checkpoint Parameters ---
 LOG_INTERVAL = 1
-CHECKPOINT_INTERVAL = 50
+CHECKPOINT_INTERVAL = 100
 MAX_CHECKPOINTS = 10
 
 class ReplayBuffer:
@@ -64,7 +64,7 @@ class ReplayBuffer:
 
 class SACAgent:
     """The Soft Actor-Critic Agent."""
-    def __init__(self, checkpoint_dir="checkpoints", plots_dir="training_plots"):
+    def __init__(self, checkpoint_dir="checkpoints_v2", plots_dir="training_plots_v2"):
         self.actor = Actor(STATE_DIM, ACTION_DIM, MAX_ACTION, HIDDEN_DIM)
         self.critic = Critic(STATE_DIM, ACTION_DIM, HIDDEN_DIM)
         self.critic_target = Critic(STATE_DIM, ACTION_DIM, HIDDEN_DIM)

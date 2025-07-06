@@ -9,7 +9,7 @@ class RewardCalculator:
     The weights for each objective can be tuned during initialization to
     prioritize different performance aspects (e.g., comfort vs. energy saving).
     """
-    def __init__(self, w_comfort=1.0, w_holding=1.0, w_regen=0.001, w_effort=1e-6):
+    def __init__(self, w_comfort=1000.0, w_holding=50.0, w_regen=10.0, w_effort=1e-6):
         """
         Initializes the reward calculator with weights for each objective.
 
